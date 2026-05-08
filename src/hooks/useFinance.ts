@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Transaction, FinanceSummary, Account } from "../types/finance";
+import { Transaction, FinanceSummary, Account, Reminder } from "../types/finance";
 
 
 const STORAGE_KEY = "fintrack_transactions";
 const CATEGORIES_KEY = "fintrack_categories";
 const ACCOUNTS_KEY = "fintrack_accounts";
+const REMINDERS_KEY = "fintrack_reminders";
 
 // Helper to generate IDs
 const generateId = () => crypto.randomUUID();
@@ -21,6 +22,7 @@ export interface CategoriesState {
 export function useFinance() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [categories, setCategories] = useState<CategoriesState>({
     income: DEFAULT_INCOME_CATEGORIES,
     expense: DEFAULT_EXPENSE_CATEGORIES,
@@ -66,10 +68,37 @@ export function useFinance() {
       if (storedCategories) {
         setCategories(JSON.parse(storedCategories));
       }
+
+      const storedReminders = localStorage.getItem(REMINDERS_KEY);
+      if (storedReminders) {
+        setReminders(JSON.parse(storedReminders));
+      }
     } catch (e) {
       console.error("Failed to load data", e);
     }
   }, []);
+
+  const saveReminders = (data: Reminder[]) => {
+    try {
+      localStorage.setItem(REMINDERS_KEY, JSON.stringify(data));
+      setReminders(data);
+    } catch (e) {
+      console.error("Failed to save reminders", e);
+    }
+  };
+
+  const addReminder = (reminder: Omit<Reminder, "id">) => {
+    const newReminder: Reminder = { ...reminder, id: generateId() };
+    saveReminders([...reminders, newReminder]);
+  };
+
+  const updateReminder = (id: string, updatedReminder: Omit<Reminder, "id">) => {
+    saveReminders(reminders.map(r => r.id === id ? { ...updatedReminder, id } : r));
+  };
+
+  const deleteReminder = (id: string) => {
+    saveReminders(reminders.filter(r => r.id !== id));
+  };
 
   const saveTransactions = (data: Transaction[]) => {
     try {
@@ -140,6 +169,23 @@ export function useFinance() {
       (t.type === type && t.category === categoryName) ? { ...t, category: fallback } : t
     );
     saveTransactions(updatedTransactions);
+  };
+
+  const reorderCategory = (type: 'income' | 'expense', startIndex: number, endIndex: number) => {
+    const list = Array.from(categories[type]);
+    const [removed] = list.splice(startIndex, 1);
+    list.splice(endIndex, 0, removed);
+    
+    const updated = {
+      ...categories,
+      [type]: list
+    };
+    try {
+      localStorage.setItem(CATEGORIES_KEY, JSON.stringify(updated));
+      setCategories(updated);
+    } catch (e) {
+      console.error("Failed to save categories", e);
+    }
   };
 
   useEffect(() => {
@@ -251,8 +297,13 @@ export function useFinance() {
     addCategory,
     editCategory,
     deleteCategory,
+    reorderCategory,
     addAccount,
     updateAccount,
     deleteAccount,
+    reminders,
+    addReminder,
+    updateReminder,
+    deleteReminder
   };
 }

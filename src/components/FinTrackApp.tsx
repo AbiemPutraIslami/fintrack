@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useFinance } from '../hooks/useFinance';
 import { cn } from '../lib/utils';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { format, parseISO, isWithinInterval, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfDay, endOfDay } from 'date-fns';
+import { format, parseISO, isWithinInterval, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfDay, endOfDay, startOfYear, endOfYear } from 'date-fns';
 import { 
   Wallet, 
   TrendingUp, 
@@ -15,16 +15,20 @@ import {
   X,
   Filter,
   CreditCard,
-  ArrowRightLeft
+  ArrowRightLeft,
+  ChevronDown,
+  ChevronUp,
+  GripVertical,
+  Bell
 } from 'lucide-react';
-import { Transaction, Account } from '../types/finance';
+import { Transaction, Account, Reminder } from '../types/finance';
 
 const COLORS = ['#22c55e', '#ef4444'];
 const DEFAULT_EXPENSE_CATEGORIES = ['Food', 'Transport', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Other'];
 const DEFAULT_INCOME_CATEGORIES = ['Salary', 'Freelance', 'Investment', 'Gift', 'Other'];
 
 export function FinTrackApp() {
-  const { transactions, accounts, summary, categories, addTransaction, updateTransaction, deleteTransaction, addCategory, editCategory, deleteCategory, addAccount, updateAccount, deleteAccount } = useFinance();
+  const { transactions, accounts, summary, categories, addTransaction, updateTransaction, deleteTransaction, addCategory, editCategory, deleteCategory, reorderCategory, addAccount, updateAccount, deleteAccount, reminders, addReminder, updateReminder, deleteReminder } = useFinance();
   const [activeTab, setActiveTab] = useState<'home' | 'transactions' | 'accounts' | 'settings'>('home');
   const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -87,13 +91,13 @@ export function FinTrackApp() {
           {activeTab === 'home' && <DashboardView summary={summary} transactions={transactions} accounts={accounts} onEditTransaction={handleOpenTransactionModal} />}
           {activeTab === 'transactions' && <TransactionListView transactions={transactions} accounts={accounts} categories={categories} onDelete={deleteTransaction} onEdit={handleOpenTransactionModal} />}
           {activeTab === 'accounts' && <AccountsView accounts={accounts} onAddAccount={addAccount} onEditAccount={updateAccount} onDeleteAccount={deleteAccount} />}
-          {activeTab === 'settings' && <SettingsView categories={categories} onEditCategory={editCategory} onDeleteCategory={deleteCategory} />}
+          {activeTab === 'settings' && <SettingsView categories={categories} onAddCategory={addCategory} onEditCategory={editCategory} onDeleteCategory={deleteCategory} onReorderCategory={reorderCategory} reminders={reminders} onAddReminder={addReminder} onUpdateReminder={updateReminder} onDeleteReminder={deleteReminder} />}
         </div>
 
         {/* Mobile Bottom Nav */}
-        <nav className="md:hidden absolute bottom-0 left-0 right-0 h-16 bg-white border-t border-gray-200 flex justify-around items-center px-2 pb-safe">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white border-t border-gray-200 flex justify-around items-center px-2 pb-safe z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
           <MobileNavItem active={activeTab === 'home'} onClick={() => setActiveTab('home')} icon={<Home />} label="Beranda" />
-          <MobileNavItem active={activeTab === 'transactions'} onClick={() => setActiveTab('transactions')} icon={<List />} label="Daftar" />
+          <MobileNavItem active={activeTab === 'transactions'} onClick={() => setActiveTab('transactions')} icon={<List />} label="Transaksi" />
           <MobileNavItem active={activeTab === 'accounts'} onClick={() => setActiveTab('accounts')} icon={<CreditCard />} label="Akun" />
           <MobileNavItem active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings />} label="Pengaturan" />
         </nav>
@@ -123,6 +127,8 @@ export function FinTrackApp() {
 // --- Subviews ---
 
 function DashboardView({ summary, transactions, accounts, onEditTransaction }: { summary: any, transactions: Transaction[], accounts: Account[], onEditTransaction: (tx: Transaction) => void }) {
+  const [chartPeriod, setChartPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
+
   const chartData = [
     { name: 'Pemasukan', value: summary.totalIncome },
     { name: 'Pengeluaran', value: summary.totalExpense },
@@ -139,6 +145,70 @@ function DashboardView({ summary, transactions, accounts, onEditTransaction }: {
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
   }, [transactions]);
+
+  const flowChartData = useMemo(() => {
+    const now = new Date();
+    
+    if (chartPeriod === 'week' || chartPeriod === 'month') {
+      let start: Date;
+      let end: Date;
+      if (chartPeriod === 'week') {
+        start = startOfWeek(now, { weekStartsOn: 1 });
+        end = endOfWeek(now, { weekStartsOn: 1 });
+      } else {
+        start = startOfMonth(now);
+        end = endOfMonth(now);
+      }
+      
+      const filtered = transactions.filter(t => isWithinInterval(parseISO(t.date), { start, end }));
+      
+      const dataMap: Record<string, { name: string, income: number, expense: number }> = {};
+      
+      // Initialize days to show continuous trend
+      const current = new Date(start);
+      while (current <= end) {
+        const dateStr = format(current, 'yyyy-MM-dd');
+        dataMap[dateStr] = { 
+          name: format(current, chartPeriod === 'week' ? 'dd MMM' : 'dd'), 
+          income: 0, 
+          expense: 0 
+        };
+        current.setDate(current.getDate() + 1);
+      }
+
+      filtered.forEach(t => {
+        const dateStr = t.date.split('T')[0];
+        if (dataMap[dateStr]) {
+          if (t.type === 'income') dataMap[dateStr].income += t.amount;
+          else if (t.type === 'expense') dataMap[dateStr].expense += t.amount;
+        }
+      });
+      return { data: Object.values(dataMap), type: 'trend' };
+    } 
+
+    // For Year or All, keep group by account as before
+    let filteredTransactions = transactions;
+    if (chartPeriod === 'year') {
+      const start = startOfYear(now);
+      const end = endOfYear(now);
+      filteredTransactions = transactions.filter(t => isWithinInterval(parseISO(t.date), { start, end }));
+    }
+
+    const dataMap: Record<string, { name: string, income: number, expense: number }> = {};
+    accounts.forEach(a => {
+      dataMap[a.id] = { name: a.name, income: 0, expense: 0 };
+    });
+
+    filteredTransactions.forEach(t => {
+      if (t.type === 'income') {
+        if (dataMap[t.accountId]) dataMap[t.accountId].income += t.amount;
+      } else if (t.type === 'expense') {
+        if (dataMap[t.accountId]) dataMap[t.accountId].expense += t.amount;
+      }
+    });
+
+    return { data: Object.values(dataMap), type: 'account' };
+  }, [transactions, accounts, chartPeriod]);
 
   const recent = transactions.slice(0, 4);
 
@@ -215,6 +285,53 @@ function DashboardView({ summary, transactions, accounts, onEditTransaction }: {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs flex flex-col mt-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+          <h3 className="text-lg font-semibold text-gray-800">
+            {flowChartData.type === 'trend' ? 'Tren Arus Kas Harian' : 'Arus Kas per Akun'}
+          </h3>
+          <div className="flex bg-gray-50 p-1 rounded-xl">
+            <button onClick={() => setChartPeriod('week')} className={cn("px-4 py-1.5 text-sm font-medium rounded-lg transition-colors", chartPeriod === 'week' ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-900")}>Minggu</button>
+            <button onClick={() => setChartPeriod('month')} className={cn("px-4 py-1.5 text-sm font-medium rounded-lg transition-colors", chartPeriod === 'month' ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-900")}>Bulan</button>
+            <button onClick={() => setChartPeriod('year')} className={cn("px-4 py-1.5 text-sm font-medium rounded-lg transition-colors", chartPeriod === 'year' ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-900")}>Tahun</button>
+            <button onClick={() => setChartPeriod('all')} className={cn("px-4 py-1.5 text-sm font-medium rounded-lg transition-colors", chartPeriod === 'all' ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-900")}>Semua</button>
+          </div>
+        </div>
+        {flowChartData.data.length === 0 ? (
+          <div className="h-64 flex items-center justify-center text-gray-400">Belum ada data</div>
+        ) : (
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={flowChartData.data} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#6b7280', fontSize: 12 }} 
+                  dy={10} 
+                />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#6b7280', fontSize: 12 }} 
+                  tickFormatter={(value: number) => value >= 1000 ? `${(value / 1000).toFixed(0)}k` : value.toString()}
+                  width={40}
+                />
+                <Tooltip
+                  cursor={{ fill: '#f3f4f6' }}
+                  formatter={(value: number) => formatCurrency(value)}
+                  contentStyle={{ borderRadius: '0.75rem', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ paddingBottom: '20px' }} />
+                <Bar dataKey="income" name="Pemasukan" fill="#22c55e" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                <Bar dataKey="expense" name="Pengeluaran" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </div>
 
       <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs flex flex-col mt-6">
@@ -384,14 +501,22 @@ const CategoryItem: React.FC<{
   categoryName: string;
   type: 'income' | 'expense';
   isDefault: boolean;
+  isFirst: boolean;
+  isLast: boolean;
   onEdit: (type: 'income' | 'expense', oldName: string, newName: string) => void;
   onDelete: (type: 'income' | 'expense', name: string) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }> = ({
   categoryName,
   type,
   isDefault,
+  isFirst,
+  isLast,
   onEdit,
-  onDelete
+  onDelete,
+  onMoveUp,
+  onMoveDown
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(categoryName);
@@ -428,19 +553,39 @@ const CategoryItem: React.FC<{
   }
 
   return (
-    <div className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl shadow-xs">
-      <span className="text-gray-800 font-medium">{categoryName}</span>
-      {!isDefault && categoryName !== 'Other' && (
-        <div className="flex items-center gap-2">
-          <button onClick={() => setIsEditing(true)} className="px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 rounded-md hover:bg-indigo-100 transition-colors">Edit</button>
-          <button onClick={handleDelete} className="p-1.5 text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors">
-            <Trash2 className="w-4 h-4" />
+    <div className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl shadow-xs group">
+      <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <button 
+            onClick={onMoveUp} 
+            disabled={isFirst}
+            className="text-gray-400 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-gray-400"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={onMoveDown}
+            disabled={isLast}
+            className="text-gray-400 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-gray-400"
+          >
+            <ChevronDown className="w-4 h-4" />
           </button>
         </div>
-      )}
-      {(isDefault || categoryName === 'Lainnya') && (
-        <span className="text-xs font-medium text-gray-400 px-2 bg-gray-50 py-1 rounded-md">Bawaan</span>
-      )}
+        <span className="text-gray-800 font-medium">{categoryName}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        {(isDefault || categoryName === 'Lainnya') && (
+          <span className="text-xs font-medium text-gray-400 px-2 bg-gray-50 py-1 rounded-md">Bawaan</span>
+        )}
+        {!isDefault && categoryName !== 'Lainnya' && categoryName !== 'Other' && (
+          <>
+            <button onClick={() => setIsEditing(true)} className="px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 rounded-md hover:bg-indigo-100 transition-colors">Edit</button>
+            <button onClick={handleDelete} className="p-1.5 text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -547,9 +692,9 @@ function AccountsView({
       </div>
 
       {isAdding && (
-         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+         <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center sm:p-0">
            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setIsAdding(false)} />
-           <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+           <div className="relative bg-white md:rounded-3xl rounded-t-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-bottom-full md:zoom-in-95 duration-300">
              <div className="flex justify-between items-center p-6 border-b border-gray-100">
                <h2 className="text-xl font-bold text-gray-900">{editingId ? 'Edit Akun' : 'Tambah Akun'}</h2>
                <button onClick={() => setIsAdding(false)} className="text-gray-400 hover:text-gray-600 bg-gray-50 p-2 rounded-full transition-colors">
@@ -588,14 +733,85 @@ function AccountsView({
 
 function SettingsView({ 
   categories, 
-
+  onAddCategory,
   onEditCategory, 
-  onDeleteCategory 
+  onDeleteCategory,
+  onReorderCategory,
+  reminders,
+  onAddReminder,
+  onUpdateReminder,
+  onDeleteReminder
 }: { 
   categories: { income: string[], expense: string[] }; 
+  onAddCategory: (type: 'income' | 'expense', name: string) => void;
   onEditCategory: (type: 'income' | 'expense', oldName: string, newName: string) => void; 
   onDeleteCategory: (type: 'income' | 'expense', categoryName: string) => void;
+  onReorderCategory: (type: 'income' | 'expense', startIndex: number, endIndex: number) => void;
+  reminders: Reminder[];
+  onAddReminder: (r: Omit<Reminder, "id">) => void;
+  onUpdateReminder: (id: string, r: Omit<Reminder, "id">) => void;
+  onDeleteReminder: (id: string) => void;
 }) {
+  const [newCatName, setNewCatName] = useState('');
+  const [addingType, setAddingType] = useState<'income' | 'expense' | null>(null);
+
+  const [isAddingReminder, setIsAddingReminder] = useState(false);
+  const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
+
+  const [reminderTitle, setReminderTitle] = useState('');
+  const [reminderAmount, setReminderAmount] = useState('');
+  const [reminderType, setReminderType] = useState<'income' | 'expense'>('expense');
+  const [reminderFreq, setReminderFreq] = useState<'daily'|'weekly'|'monthly'|'yearly'>('monthly');
+  const [reminderDate, setReminderDate] = useState('');
+
+  const openAddReminder = () => {
+    setIsAddingReminder(true);
+    setEditingReminderId(null);
+    setReminderTitle('');
+    setReminderAmount('');
+    setReminderType('expense');
+    setReminderFreq('monthly');
+    setReminderDate(new Date().toISOString().split('T')[0]);
+  };
+
+  const openEditReminder = (r: Reminder) => {
+    setIsAddingReminder(true);
+    setEditingReminderId(r.id);
+    setReminderTitle(r.title);
+    setReminderAmount(r.amount.toString());
+    setReminderType(r.type);
+    setReminderFreq(r.frequency);
+    setReminderDate(r.nextDueDate);
+  };
+
+  const saveReminder = () => {
+    if (!reminderTitle.trim() || !reminderAmount || isNaN(Number(reminderAmount)) || !reminderDate) return;
+    
+    const rData: Omit<Reminder, "id"> = {
+      title: reminderTitle.trim(),
+      amount: Number(reminderAmount),
+      type: reminderType,
+      frequency: reminderFreq,
+      nextDueDate: reminderDate
+    };
+
+    if (editingReminderId) {
+      onUpdateReminder(editingReminderId, rData);
+    } else {
+      onAddReminder(rData);
+    }
+    
+    setIsAddingReminder(false);
+    setEditingReminderId(null);
+  };
+
+  const handleAddCategory = (type: 'income' | 'expense') => {
+    if (newCatName.trim()) {
+      onAddCategory(type, newCatName.trim());
+      setNewCatName('');
+      setAddingType(null);
+    }
+  };
 
   const renderCategoryList = (type: 'income' | 'expense') => {
     const list = categories[type];
@@ -603,7 +819,7 @@ function SettingsView({
     
     return (
       <div className="space-y-2 mt-3">
-        {list.map(cat => {
+        {list.map((cat, index) => {
           const isDefault = defaultList.includes(cat);
           return (
             <CategoryItem 
@@ -611,11 +827,39 @@ function SettingsView({
               categoryName={cat} 
               type={type} 
               isDefault={isDefault} 
+              isFirst={index === 0}
+              isLast={index === list.length - 1}
               onEdit={onEditCategory} 
               onDelete={onDeleteCategory} 
+              onMoveUp={() => onReorderCategory(type, index, index - 1)}
+              onMoveDown={() => onReorderCategory(type, index, index + 1)}
             />
           );
         })}
+        {addingType === type ? (
+          <div className="flex items-center gap-2 p-2 bg-indigo-50 border border-indigo-200 rounded-lg">
+            <input 
+              autoFocus
+              type="text" 
+              value={newCatName} 
+              onChange={(e) => setNewCatName(e.target.value)}
+              placeholder="Nama Kategori Baru"
+              className="flex-1 px-3 py-1.5 text-sm bg-white border-2 border-indigo-500 rounded-md outline-none"
+            />
+            <button onClick={() => handleAddCategory(type)} className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors">Tambah</button>
+            <button onClick={() => { setAddingType(null); setNewCatName(''); }} className="p-1.5 text-gray-500 hover:bg-gray-200 rounded-md transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <button 
+            onClick={() => { setAddingType(type); setNewCatName(''); }}
+            className="flex items-center justify-center w-full gap-2 p-3 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors mt-2"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Kategori {type === 'income' ? 'Pemasukan' : 'Pengeluaran'} Baru
+          </button>
+        )}
       </div>
     );
   };
@@ -646,7 +890,148 @@ function SettingsView({
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Kategori Pemasukan</h3>
           {renderCategoryList('income')}
         </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Pengingat Tagihan & Transaksi</h3>
+            <button 
+              onClick={openAddReminder}
+              className="p-2 text-indigo-600 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors"
+            >
+              <Plus className="w-5 h-5" />
+            </button>
+          </div>
+          {reminders.length === 0 ? (
+            <div className="text-center py-6 text-gray-500 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+              <Bell className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+              <p className="text-sm">Belum ada pengingat.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {reminders.map(r => (
+                <div key={r.id} className="flex items-center justify-between p-4 bg-white border border-gray-100 rounded-xl shadow-xs hover:border-indigo-100 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className={cn("p-2 rounded-lg", r.type === 'expense' ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600")}>
+                      <Bell className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-900">{r.title}</p>
+                      <p className="text-xs text-gray-500 capitalize">
+                        {r.frequency} • <span className="font-medium text-indigo-600">{format(parseISO(r.nextDueDate), 'dd MMM yyyy')}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <span className={cn("font-bold text-sm", r.type === 'expense' ? "text-red-600" : "text-green-600")}>
+                      {r.type === 'expense' ? '-' : '+'}{formatCurrency(r.amount)}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => openEditReminder(r)} className="px-2 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 rounded hover:bg-indigo-100 transition-colors">Edit</button>
+                      <button onClick={() => onDeleteReminder(r.id)} className="p-1 text-red-600 bg-red-50 rounded hover:bg-red-100 transition-colors">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {isAddingReminder && (
+         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={() => setIsAddingReminder(false)} />
+           <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+             <div className="flex justify-between items-center p-6 border-b border-gray-100">
+               <h2 className="text-xl font-bold text-gray-900">{editingReminderId ? 'Edit Pengingat' : 'Tambah Pengingat'}</h2>
+               <button onClick={() => setIsAddingReminder(false)} className="text-gray-400 hover:text-gray-600 bg-gray-50 p-2 rounded-full transition-colors">
+                 <X className="h-5 w-5" />
+               </button>
+             </div>
+             <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+               <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">Judul / Nama Tagihan</label>
+                 <input 
+                   type="text" 
+                   value={reminderTitle}
+                   onChange={e => setReminderTitle(e.target.value)}
+                   className="w-full px-4 py-2.5 bg-gray-50 border-transparent focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-200 rounded-xl text-md transition-all outline-none"
+                   placeholder="Mis. Tagihan Listrik"
+                   required
+                 />
+               </div>
+               <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tipe</label>
+                  <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setReminderType('expense')}
+                      className={cn("flex-1 py-1.5 font-medium text-sm rounded-lg transition-all", reminderType === 'expense' ? "bg-white text-red-600 shadow-sm" : "text-gray-500 hover:text-gray-700")}
+                    >
+                      Pengeluaran
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReminderType('income')}
+                      className={cn("flex-1 py-1.5 font-medium text-sm rounded-lg transition-all", reminderType === 'income' ? "bg-white text-green-600 shadow-sm" : "text-gray-500 hover:text-gray-700")}
+                    >
+                      Pemasukan
+                    </button>
+                  </div>
+               </div>
+               <div>
+                 <label className="block text-sm font-medium text-gray-700 mb-1">Nominal</label>
+                 <div className="relative">
+                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-medium">Rp</span>
+                   <input 
+                     type="number"
+                     value={reminderAmount}
+                     onChange={e => setReminderAmount(e.target.value)}
+                     className="w-full pl-12 pr-4 py-2.5 bg-gray-50 border-transparent focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-200 rounded-xl text-md transition-all outline-none"
+                     placeholder="0"
+                     required
+                   />
+                 </div>
+               </div>
+               <div className="grid grid-cols-2 gap-4">
+                 <div>
+                   <label className="block text-sm font-medium text-gray-700 mb-1">Frekuensi</label>
+                   <select 
+                     value={reminderFreq}
+                     onChange={e => setReminderFreq(e.target.value as any)}
+                     className="w-full px-4 py-2.5 bg-gray-50 border-transparent focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-200 rounded-xl text-md transition-all outline-none"
+                   >
+                     <option value="daily">Harian</option>
+                     <option value="weekly">Mingguan</option>
+                     <option value="monthly">Bulanan</option>
+                     <option value="yearly">Tahunan</option>
+                   </select>
+                 </div>
+                 <div>
+                   <label className="block text-sm font-medium text-gray-700 mb-1">Jatuh Tempo Berikutnya</label>
+                   <input 
+                     type="date"
+                     value={reminderDate}
+                     onChange={e => setReminderDate(e.target.value)}
+                     className="w-full px-4 py-2.5 bg-gray-50 border-transparent focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-200 rounded-xl text-md transition-all outline-none"
+                     required
+                   />
+                 </div>
+               </div>
+               <div className="pt-2">
+                 <button 
+                   onClick={saveReminder}
+                   disabled={!reminderTitle.trim() || !reminderAmount || isNaN(Number(reminderAmount)) || !reminderDate}
+                   className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white rounded-xl font-semibold transition-all shadow-md focus:ring-4 focus:ring-indigo-100"
+                 >
+                   Simpan Pengingat
+                 </button>
+               </div>
+             </div>
+           </div>
+         </div>
+      )}
     </div>
   );
 }
@@ -738,17 +1123,17 @@ function TransactionModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-0">
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center sm:p-0">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={onClose} />
-      <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
-        <div className="flex justify-between items-center p-6 border-b border-gray-100">
+      <div className="relative bg-white md:rounded-3xl rounded-t-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-bottom-full md:zoom-in-95 duration-300 flex flex-col max-h-[90vh]">
+        <div className="flex justify-between items-center p-6 border-b border-gray-100 shrink-0">
           <h2 className="text-xl font-bold text-gray-900">{initialData ? 'Edit Transaksi' : 'Tambah Transaksi'}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 bg-gray-50 p-2 rounded-full transition-colors">
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 bg-gray-50 p-2 rounded-full transition-colors">
             <X className="h-5 w-5" />
           </button>
         </div>
         
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 flex flex-col max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-6 space-y-5 flex flex-col overflow-y-auto">
           {/* Type Toggle */}
           <div className="flex bg-gray-100 rounded-xl p-1 gap-1 shrink-0">
             <button
@@ -928,55 +1313,105 @@ function SummaryCard({ title, amount, type }: { title: string, amount: number, t
 }
 
 const TransactionRow: React.FC<{ transaction: Transaction, accountName?: string, showDelete?: boolean, onDelete?: () => void, onEdit?: () => void }> = ({ transaction, accountName, showDelete, onDelete, onEdit }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const isIncome = transaction.type === 'income';
   const isTransfer = transaction.type === 'transfer';
   return (
-    <div 
-      className={cn("flex items-center justify-between p-4 bg-white md:bg-transparent md:hover:bg-gray-50 rounded-xl md:rounded-none transition-colors group", onEdit && "cursor-pointer")}
-      onClick={() => onEdit && onEdit()}
-    >
-      <div className="flex items-center gap-4">
-        <div className={cn(
-          "w-12 h-12 rounded-full flex items-center justify-center shrink-0",
-          isTransfer ? "bg-blue-100 text-blue-600" : isIncome ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"
-        )}>
-          {isTransfer ? <ArrowRightLeft className="h-6 w-6" /> : isIncome ? <TrendingUp className="h-6 w-6" /> : <TrendingDown className="h-6 w-6" />}
-        </div>
-        <div>
-          <p className="font-semibold text-gray-900">{isTransfer ? 'Transfer' : transaction.category}</p>
-          <div className="flex items-center text-sm text-gray-500 gap-2">
-            <span>{format(parseISO(transaction.date), 'dd MMM yyyy')}</span>
-            {accountName && (
-              <>
-                <span className="w-1 h-1 rounded-full bg-gray-300" />
-                <span className="truncate max-w-[100px]">{accountName}</span>
-              </>
-            )}
-            {transaction.note && (
-              <>
-                <span className="w-1 h-1 rounded-full bg-gray-300" />
-                <span className="truncate max-w-[100px] sm:max-w-[200px]">{transaction.note}</span>
-              </>
-            )}
+    <div className="flex flex-col group border-b last:border-0 border-gray-50 md:border-b-0 animate-in fade-in duration-300">
+      <div 
+        className={cn("flex items-center justify-between p-4 bg-white md:bg-transparent md:hover:bg-gray-50 rounded-xl md:rounded-none transition-colors", "cursor-pointer")}
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <div className={cn(
+            "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shrink-0",
+            isTransfer ? "bg-blue-100 text-blue-600" : isIncome ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"
+          )}>
+            {isTransfer ? <ArrowRightLeft className="h-5 w-5 md:h-6 md:w-6" /> : isIncome ? <TrendingUp className="h-5 w-5 md:h-6 md:w-6" /> : <TrendingDown className="h-5 w-5 md:h-6 md:w-6" />}
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-gray-900 truncate">{isTransfer ? 'Transfer' : transaction.category}</p>
+            <div className="flex items-center text-xs md:text-sm text-gray-500 gap-1 md:gap-2">
+              <span className="shrink-0">{format(parseISO(transaction.date), 'dd MMM yyyy')}</span>
+              {accountName && !isExpanded && (
+                <>
+                  <span className="w-1 h-1 rounded-full bg-gray-300 shrink-0 mx-1 md:mx-0" />
+                  <span className="truncate max-w-[80px] sm:max-w-[120px]">{isTransfer ? accountName.replace(' → ', ' - ') : accountName}</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-      <div className="flex items-center gap-4">
-        <span className={cn("font-bold", isTransfer ? "text-blue-600" : isIncome ? "text-green-600" : "text-gray-900")}>
-          {isTransfer ? '' : isIncome ? '+' : '-'}{formatCurrency(transaction.amount)}
-        </span>
-        {showDelete && onDelete && (
+        <div className="flex items-center gap-2 md:gap-4 shrink-0 pl-2">
+          <span className={cn("font-bold text-right text-sm md:text-base", isTransfer ? "text-blue-600" : isIncome ? "text-green-600" : "text-gray-900")}>
+            {isTransfer ? '' : isIncome ? '+' : '-'}{formatCurrency(transaction.amount)}
+            {isTransfer && transaction.transferCharge ? (
+              <span className="block text-xs font-normal text-red-500 whitespace-nowrap mt-0.5">-{formatCurrency(transaction.transferCharge)} (biaya)</span>
+            ) : null}
+          </span>
           <button 
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all md:focus:opacity-100"
+            className="p-1 text-gray-400 hover:text-gray-600 shrink-0"
           >
-            <Trash2 className="h-5 w-5" />
+            <ChevronDown className={cn("h-5 w-5 transition-transform duration-300", isExpanded && "rotate-180")} />
           </button>
-        )}
+        </div>
       </div>
+      
+      {isExpanded && (
+        <div className="px-4 pb-4 md:px-16 animate-in slide-in-from-top-2 duration-200">
+          <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-3 text-sm">
+            {isTransfer && (
+              <>
+                <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+                  <span className="text-gray-500">Dari Akun</span>
+                  <span className="font-medium text-gray-900">{accountName?.split(' → ')[0] || '-'}</span>
+                </div>
+                <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+                  <span className="text-gray-500">Ke Akun</span>
+                  <span className="font-medium text-gray-900">{accountName?.split(' → ')[1] || '-'}</span>
+                </div>
+                {(transaction.transferCharge ?? 0) > 0 && (
+                  <div className="flex justify-between items-center bg-red-50 p-2 rounded-lg border border-red-100 mt-2">
+                    <span className="text-red-700 font-medium flex items-center gap-1.5 shadow-sm">
+                      <TrendingDown className="w-4 h-4" /> Biaya Transfer (Fee)
+                    </span>
+                    <span className="font-bold text-red-600">-{formatCurrency(transaction.transferCharge!)}</span>
+                  </div>
+                )}
+              </>
+            )}
+            {!isTransfer && accountName && (
+              <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+                <span className="text-gray-500">Akun</span>
+                <span className="font-medium text-gray-900">{accountName}</span>
+              </div>
+            )}
+            <div className="flex justify-between items-start pt-1">
+              <span className="text-gray-500 whitespace-nowrap mr-4">Catatan</span>
+              <span className="font-medium text-gray-900 text-right">{transaction.note || '-'}</span>
+            </div>
+            
+            <div className="flex justify-end gap-2 pt-3 mt-2 border-t border-gray-200">
+              {onEdit && (
+                <button 
+                  onClick={(e) => { e.stopPropagation(); onEdit(); }}
+                  className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-lg transition-colors border border-indigo-200"
+                >
+                  Edit
+                </button>
+              )}
+              {showDelete && onDelete && (
+                <button 
+                  onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                  className="px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-100 hover:bg-red-200 rounded-lg transition-colors border border-red-200 flex items-center gap-1"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Hapus
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

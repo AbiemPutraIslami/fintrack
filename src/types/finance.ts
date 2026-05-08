@@ -7,6 +7,15 @@ export interface Account {
   initialBalance: number;
 }
 
+export interface Reminder {
+  id: string;
+  title: string;
+  amount: number;
+  type: "income" | "expense";
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  nextDueDate: string;
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
