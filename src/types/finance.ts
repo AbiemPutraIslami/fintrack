@@ -16,6 +16,11 @@ export interface Reminder {
   nextDueDate: string;
 }
 
+export interface Budget {
+  category: string;
+  monthlyLimit: number;
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
